@@ -1,0 +1,41 @@
+import pandas as pd
+import json
+
+def compute_backtest_accuracy(sentiment_df, returns_df):
+    # 1. Merge tables on ticker and filing_date
+    # Ensure both columns are formatted correctly before merging
+    merged_df = pd.merge(sentiment_df, returns_df, on=['ticker', 'filing_date'])
+
+    # 2. Define Directional Logic
+    active_signals = merged_df[merged_df['predicted_direction'] != 'NEUTRAL'].copy()
+    
+    # 3. Calculate Correctness
+    active_signals['correct'] = (active_signals['predicted_direction'] == active_signals['actual_direction']).astype(int)
+
+    # 4. Compute Stats
+    n_obs = len(active_signals)
+    overall_accuracy = active_signals['correct'].mean() if n_obs > 0 else 0
+    
+    # Accuracy by direction
+    up_calls = active_signals[active_signals['predicted_direction'] == 'UP']
+    down_calls = active_signals[active_signals['predicted_direction'] == 'DOWN']
+    
+    up_accuracy = up_calls['correct'].mean() if len(up_calls) > 0 else 0
+    down_accuracy = down_calls['correct'].mean() if len(down_calls) > 0 else 0
+
+    # 5. Store Summary Stats
+    summary_stats = {
+        'overall_accuracy': round(overall_accuracy, 4),
+        'up_accuracy': round(up_accuracy, 4),
+        'down_accuracy': round(down_accuracy, 4),
+        'n_observations': n_obs
+    }
+
+    # 6. Save Deliverables
+    active_signals.to_csv('data/backtest_results.csv', index=False)
+    with open('data/backtest_summary.json', 'w') as f:
+        json.dump(summary_stats, f)
+
+    return active_signals, summary_stats
+
+print("Backtest complete. Results saved to /data.")
