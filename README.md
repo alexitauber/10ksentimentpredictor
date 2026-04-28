@@ -4,26 +4,29 @@
 This project analyzes the language used in publicly traded companies' annual reports (10-K filings) to predict the directional movement of their stock price following the filing date.
 ### Overview
 Every public company is required to file a 10-K annual report with the SEC. Item 1 of the 10-K, the Business Description section, contains management's narrative description of the company's operations, strategy, and outlook. The language used in this section — whether optimistic or cautious — can reflect management's underlying sentiment about the company's future prospects.
-This tool extracts Item 1 text from the most recent 10-K filing for any given ticker, scores it using VADER (Valence Aware Dictionary and sEntiment Reasoner), and uses the resulting sentiment score to predict whether the stock is likely to trend upward or downward in the 30 days following the filing date.
+This tool extracts Item 1 text from the most recent 10-K filing for any given ticker, scores it using the Loughran-McDonald financial sentiment dictionary, and uses the resulting sentiment score to predict whether the stock is likely to trend upward or downward in the 30 days following the filing date.
 
 ## How It Works
 
 Data Collection — The app fetches the most recent 10-K filing directly from the SEC EDGAR database using the company's ticker symbol
 Text Extraction — Item 1 of the filing is isolated and cleaned, stripping HTML formatting, tables, and boilerplate legal language
-Sentiment Scoring — VADER analyzes the cleaned text and produces a compound sentiment score ranging from -1 (most negative) to +1 (most positive)
+Sentiment Scoring — the Loughran-McDonald dictionary identifies positive and negative financial language and produces a normalized compound sentiment score ranging from -1 (most negative) to +1 (most positive)
 Prediction — A threshold rule converts the sentiment score into a directional signal: positive sentiment predicts upward movement, negative sentiment predicts downward movement
 Validation — The model's historical accuracy is displayed alongside the prediction, computed by backtesting the same rules-based approach across a sample of S&P 500 filings from the past three years
+
+## Running The Project
+Run the full workflow from `main.py`. The supporting files contain reusable functions, and `main.py` is the single entry point that downloads filings, extracts Item 1, scores sentiment, calculates forward returns, and writes the backtest outputs into `data/`.
 
 ### Tech Stack
 
 Streamlit — dashboard and user interface
 sec-edgar-downloader — fetching 10-K filings from SEC EDGAR
-NLTK / VADER — sentiment analysis
+Loughran-McDonald Financial Sentiment Dictionary — sentiment analysis
 yfinance — historical stock price data for backtesting
 pandas / scikit-learn — data processing and validation
 
 ### Limitations
-VADER is a general-purpose sentiment tool trained on social media text, not financial or legal language. Certain words common in 10-K filings may be scored incorrectly in a financial context. A natural extension of this project would be to swap VADER for the Loughran-McDonald Financial Sentiment Dictionary, which is purpose-built for SEC filings. Additionally, this tool is intended for academic and educational purposes only and should not be used as the basis for real investment decisions.
+The dictionary-based approach is more appropriate for SEC filings than a general-purpose sentiment tool, but it is still a simplified model. It does not capture context, negation, or the strength of multi-word phrases, and it treats every matched word as equally informative. Additionally, this tool is intended for academic and educational purposes only and should not be used as the basis for real investment decisions.
 
 
 # Psuedocode
@@ -71,10 +74,10 @@ For each ticker in universe:
 
 
 # ============================================================
-# STEP 3: SCORE SENTIMENT WITH VADER
+# STEP 3: SCORE SENTIMENT WITH A FINANCIAL DICTIONARY
 # ============================================================
 
-Initialize VADER SentimentIntensityAnalyzer
+Load the Loughran-McDonald sentiment dictionary
 
 For each (ticker, filing_date, item1_text):
 
@@ -83,7 +86,7 @@ For each (ticker, filing_date, item1_text):
         → Group into chunks of ~500 words
 
     For each chunk:
-        → scores = analyzer.polarity_scores(chunk)
+        → count positive and negative dictionary matches
         → store chunk compound score
 
     Final compound = average of all chunk compound scores
@@ -180,10 +183,10 @@ Phase 2: Streamlit Dashboard (live inference)
 # STEP 1: APP STARTUP
 # ============================================================
 
-Import: streamlit, sec-edgar-downloader, nltk vader,
+Import: streamlit, sec-edgar-downloader,
         yfinance, pandas, json
 
-Initialize VADER SentimentIntensityAnalyzer
+Initialize the dictionary-based sentiment scorer
 
 Load pre-computed files:
     → backtest_results = pd.read_csv('backtest_results.csv')
@@ -257,7 +260,7 @@ Display:
 # ============================================================
 
 Chunk Item 1 text into ~500 word paragraphs
-Score each chunk with VADER
+Score each chunk with the financial dictionary
 Compute averages: compound, pos, neg, neu
 
 Display sentiment breakdown:

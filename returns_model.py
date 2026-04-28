@@ -139,7 +139,3 @@ def get_forward_returns(ticker, filing_date):
         print(f"Error: could not calculate forward returns for {ticker}: {error}")
         return None
 
-
-if __name__ == "__main__":
-    result = get_forward_returns("AAPL", "2023-10-27")
-    print(result)
