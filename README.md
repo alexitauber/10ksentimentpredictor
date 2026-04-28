@@ -17,6 +17,16 @@ Validation — The model's historical accuracy is displayed alongside the predic
 ## Running The Project
 Run the full workflow from `main.py`. The supporting files contain reusable functions, and `main.py` is the single entry point that downloads filings, extracts Item 1, scores sentiment, calculates forward returns, and writes the backtest outputs into `data/`.
 
+## Project Structure
+- `main.py`: runs the batch pipeline and regenerates the backtest data files
+- `app/dashboard.py`: Streamlit dashboard for live ticker analysis
+- `src/fin377_project/`: reusable SEC, sentiment, returns, and backtest modules
+- `data/`: generated CSV and JSON outputs used by the dashboard
+- `sec-edgar-filings/`: downloaded SEC filing files
+
+## Dashboard
+Run the dashboard with Streamlit and enter a ticker symbol to fetch the latest 10-K, score Item 1, and display a projection with historical context from the saved backtest files.
+
 ### Tech Stack
 
 Streamlit — dashboard and user interface
