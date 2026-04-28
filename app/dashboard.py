@@ -20,6 +20,51 @@ st.set_page_config(
 )
 
 
+def apply_theme():
+    st.markdown(
+        """
+        <style>
+            .stApp {
+                background: #ffffff;
+                color: #0f172a;
+            }
+            .block-container {
+                padding-top: 2rem;
+                padding-bottom: 2rem;
+                max-width: 1180px;
+            }
+            h1, h2, h3, p, label, .stMarkdown, .stCaption, .stMetricLabel, .stMetricValue {
+                color: #0f172a !important;
+            }
+            [data-testid="stSidebar"] {
+                background: #f8fafc;
+                border-right: 1px solid #e2e8f0;
+            }
+            [data-testid="stSidebar"] * {
+                color: #0f172a !important;
+            }
+            [data-testid="stTextInputRootElement"] input {
+                background: #ffffff;
+                color: #0f172a;
+                border: 1px solid #cbd5e1;
+            }
+            [data-testid="stDataFrame"] {
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                overflow: hidden;
+            }
+            div[data-testid="stMetric"] {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 0.9rem 1rem;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 @st.cache_data(show_spinner=False)
 def load_backtest_results() -> pd.DataFrame:
     if not BACKTEST_RESULTS_PATH.exists():
@@ -48,8 +93,8 @@ def render_prediction_banner(direction: str, confidence):
 
     st.markdown(
         f"""
-        <div style="padding: 20px 24px; border: 1px solid #dbe4ee; border-radius: 8px; background: #f8fafc;">
-            <div style="font-size: 12px; text-transform: uppercase; color: #64748b; letter-spacing: 0;">Projection</div>
+        <div style="padding: 20px 24px; border: 1px solid #e2e8f0; border-radius: 8px; background: #ffffff;">
+            <div style="font-size: 12px; text-transform: uppercase; color: #475569; letter-spacing: 0.04em;">Projection</div>
             <div style="font-size: 40px; font-weight: 700; color: {color}; margin-top: 8px;">{label}</div>
         </div>
         """,
@@ -63,16 +108,40 @@ def render_prediction_banner(direction: str, confidence):
         st.caption("Sentiment is too weak to make a directional call.")
 
 
+def get_directional_sentiment_mix(result: dict) -> dict[str, float]:
+    positive_count = result.get("positive_word_count", 0)
+    negative_count = result.get("negative_word_count", 0)
+    matched_count = positive_count + negative_count
+
+    if matched_count == 0:
+        return {"positive": 0.0, "negative": 0.0}
+
+    return {
+        "positive": positive_count / matched_count,
+        "negative": negative_count / matched_count,
+    }
+
+
 def render_sentiment_bars(result: dict):
+    sentiment_mix = get_directional_sentiment_mix(result)
     sentiment_pairs = [
-        ("Positive language", result["pos"]),
-        ("Negative language", result["neg"]),
-        ("Neutral language", result["neu"]),
+        ("Positive language", sentiment_mix["positive"], "#15803d"),
+        ("Negative language", sentiment_mix["negative"], "#b91c1c"),
     ]
 
-    for label, value in sentiment_pairs:
-        st.write(f"{label}: {value:.1%}")
-        st.progress(float(value))
+    for label, value, color in sentiment_pairs:
+        st.markdown(
+            f"""
+            <div style="margin: 0.85rem 0 0.35rem 0; display: flex; justify-content: space-between; font-size: 0.95rem;">
+                <span style="color: #0f172a;">{label}</span>
+                <span style="color: #334155; font-weight: 600;">{value:.1%}</span>
+            </div>
+            <div style="width: 100%; height: 10px; background: #e2e8f0; border-radius: 999px; overflow: hidden;">
+                <div style="width: {value * 100:.1f}%; height: 100%; background: {color};"></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def render_historical_context(backtest_results: pd.DataFrame, ticker: str):
@@ -121,6 +190,7 @@ def get_ticker_backtest_context(saved_backtest_results: pd.DataFrame, ticker: st
 
 
 def main():
+    apply_theme()
     backtest_results = load_backtest_results()
     backtest_summary = load_backtest_summary()
 
@@ -184,10 +254,11 @@ def main():
 
         st.subheader("Sentiment Detail")
         detail_cols = st.columns(4)
+        directional_mix = get_directional_sentiment_mix(result)
         detail_cols[0].metric("Compound", f"{result['compound']:.3f}")
-        detail_cols[1].metric("Positive", f"{result['pos']:.1%}")
-        detail_cols[2].metric("Negative", f"{result['neg']:.1%}")
-        detail_cols[3].metric("Neutral", f"{result['neu']:.1%}")
+        detail_cols[1].metric("Positive", f"{directional_mix['positive']:.1%}")
+        detail_cols[2].metric("Negative", f"{directional_mix['negative']:.1%}")
+        detail_cols[3].metric("Matched words", result["matched_word_count"])
         render_sentiment_bars(result)
 
     with right_col:
