@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .backtest import run_backtest
+from .backtest import run_backtest, run_backtest_for_records
 from .config import (
     DATA_DIR,
     DEFAULT_FILING_LIMIT,
@@ -60,3 +60,24 @@ def analyze_latest_filing_for_ticker(ticker: str, dictionary_path: Path = DICTIO
     scored_filing["company_name"] = get_company_name(normalized_ticker) or normalized_ticker
     scored_filing["preview_text"] = " ".join(scored_filing["item_1_content"].split()[:300])
     return scored_filing
+
+
+def run_ticker_backtest(
+    ticker: str,
+    filing_limit: int = DEFAULT_FILING_LIMIT,
+    dictionary_path: Path = DICTIONARY_PATH,
+):
+    normalized_ticker = ticker.strip().upper()
+    if not normalized_ticker:
+        raise ValueError("Ticker cannot be blank.")
+
+    download_filings([normalized_ticker], limit=filing_limit)
+    ticker_filings = extract_item1(ticker_filter=normalized_ticker)
+    if not ticker_filings:
+        raise ValueError(f"Could not retrieve filings for {normalized_ticker}.")
+
+    backtest_results_df, backtest_summary = run_backtest_for_records(
+        ticker_filings,
+        dictionary_path=dictionary_path,
+    )
+    return ticker_filings, backtest_results_df, backtest_summary

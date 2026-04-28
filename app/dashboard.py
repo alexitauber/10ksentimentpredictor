@@ -10,7 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.fin377_project.config import BACKTEST_RESULTS_PATH, BACKTEST_SUMMARY_PATH
-from src.fin377_project.pipeline import analyze_latest_filing_for_ticker
+from src.fin377_project.pipeline import analyze_latest_filing_for_ticker, run_ticker_backtest
 from src.fin377_project.sentiment import NEGATIVE_THRESHOLD, POSITIVE_THRESHOLD
 
 
@@ -95,6 +95,31 @@ def render_historical_context(backtest_results: pd.DataFrame, ticker: str):
     )
 
 
+def get_ticker_backtest_context(saved_backtest_results: pd.DataFrame, ticker: str):
+    ticker = ticker.strip().upper()
+    saved_ticker_results = saved_backtest_results[saved_backtest_results["ticker"] == ticker].copy()
+    if not saved_ticker_results.empty:
+        n_obs = len(saved_ticker_results)
+        summary = {
+            "overall_accuracy": float(saved_ticker_results["correct"].mean()) if n_obs else 0.0,
+            "up_accuracy": float(
+                saved_ticker_results.loc[saved_ticker_results["predicted_direction"] == "UP", "correct"].mean()
+            )
+            if (saved_ticker_results["predicted_direction"] == "UP").any()
+            else 0.0,
+            "down_accuracy": float(
+                saved_ticker_results.loc[saved_ticker_results["predicted_direction"] == "DOWN", "correct"].mean()
+            )
+            if (saved_ticker_results["predicted_direction"] == "DOWN").any()
+            else 0.0,
+            "n_observations": int(n_obs),
+        }
+        return saved_ticker_results, summary, False
+
+    ticker_results, ticker_summary = run_ticker_backtest(ticker)[1:]
+    return ticker_results, ticker_summary, True
+
+
 def main():
     backtest_results = load_backtest_results()
     backtest_summary = load_backtest_summary()
@@ -137,11 +162,17 @@ def main():
     try:
         with st.spinner(f"Analyzing {ticker}..."):
             result = analyze_latest_filing_for_ticker(ticker)
+            ticker_backtest_results, ticker_backtest_summary, generated_for_ticker = get_ticker_backtest_context(
+                backtest_results,
+                ticker,
+            )
     except Exception as error:
         st.error(f"Could not analyze {ticker}: {error}")
         return
 
     st.success(f"10-K filing found for {result['company_name']} and filed on {result['filing_date']}.")
+    if generated_for_ticker:
+        st.info(f"Generated a fresh backtest for {ticker} from its downloaded filings because it was not already in the saved history.")
 
     with st.expander("Item 1 preview", expanded=False):
         st.write(result["preview_text"])
@@ -161,12 +192,12 @@ def main():
 
     with right_col:
         st.subheader("Backtest Stats")
-        if backtest_summary:
+        if ticker_backtest_summary:
             stats_cols = st.columns(2)
-            stats_cols[0].metric("Overall accuracy", f"{backtest_summary.get('overall_accuracy', 0):.1%}")
-            stats_cols[1].metric("Observations", backtest_summary.get("n_observations", 0))
-            stats_cols[0].metric("UP calls", f"{backtest_summary.get('up_accuracy', 0):.1%}")
-            stats_cols[1].metric("DOWN calls", f"{backtest_summary.get('down_accuracy', 0):.1%}")
+            stats_cols[0].metric("Overall accuracy", f"{ticker_backtest_summary.get('overall_accuracy', 0):.1%}")
+            stats_cols[1].metric("Observations", ticker_backtest_summary.get("n_observations", 0))
+            stats_cols[0].metric("UP calls", f"{ticker_backtest_summary.get('up_accuracy', 0):.1%}")
+            stats_cols[1].metric("DOWN calls", f"{ticker_backtest_summary.get('down_accuracy', 0):.1%}")
         else:
             st.info("Historical backtest stats are not available yet.")
 
@@ -178,7 +209,7 @@ def main():
             st.caption(f"Example matched words: {result['matched_words_preview']}")
 
     st.subheader("Historical Context")
-    render_historical_context(backtest_results, ticker)
+    render_historical_context(ticker_backtest_results, ticker)
 
     st.caption(
         "This application is an academic project built for educational purposes. "

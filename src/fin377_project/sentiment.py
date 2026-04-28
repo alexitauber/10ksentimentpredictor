@@ -106,6 +106,27 @@ def score_extracted_filings(
     return scored_df
 
 
+def score_filing_records(
+    filing_records: list[dict],
+    dictionary_path: Path = DICTIONARY_PATH,
+) -> pd.DataFrame:
+    sentiment_dict = load_dictionary(dictionary_path)
+
+    scored_rows = []
+    for record in filing_records:
+        score = calculate_sentiment_score(record["item_1_content"], sentiment_dict)
+        scored_rows.append(
+            {
+                "ticker": record["ticker"],
+                "filing_date": record["filing_date"],
+                "accession_number": record["accession_number"],
+                **score,
+            }
+        )
+
+    return pd.DataFrame(scored_rows)
+
+
 def score_single_filing(
     filing_record: dict,
     dictionary_path: Path = DICTIONARY_PATH,

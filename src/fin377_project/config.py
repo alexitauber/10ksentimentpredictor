@@ -3,7 +3,22 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 FILINGS_DIR = PROJECT_ROOT / "sec-edgar-filings"
-DICTIONARY_PATH = PROJECT_ROOT / "LM_MasterDictionary_1993-2021.csv"
+
+
+def _resolve_dictionary_path() -> Path:
+    candidate_paths = [
+        PROJECT_ROOT / "LM_MasterDictionary_1993-2021.csv",
+        PROJECT_ROOT / "LM_MasterDictionary_Filtered.csv",
+    ]
+
+    for candidate in candidate_paths:
+        if candidate.exists():
+            return candidate
+
+    return candidate_paths[0]
+
+
+DICTIONARY_PATH = _resolve_dictionary_path()
 
 ITEM1_OUTPUT_PATH = DATA_DIR / "item1_extracted.csv"
 SENTIMENT_OUTPUT_PATH = DATA_DIR / "sentiment_scores.csv"

@@ -12,7 +12,7 @@ from .config import (
     SENTIMENT_OUTPUT_PATH,
 )
 from .returns import get_forward_returns
-from .sentiment import score_extracted_filings
+from .sentiment import score_extracted_filings, score_filing_records
 
 
 def build_returns_dataset(sentiment_df: pd.DataFrame) -> pd.DataFrame:
@@ -83,4 +83,11 @@ def run_backtest(
     with open(backtest_summary_path, "w", encoding="utf-8") as summary_file:
         json.dump(summary_stats, summary_file, indent=2)
 
+    return active_signals, summary_stats
+
+
+def run_backtest_for_records(filing_records: list[dict], dictionary_path: Path = DICTIONARY_PATH):
+    sentiment_df = score_filing_records(filing_records, dictionary_path=dictionary_path)
+    returns_df = build_returns_dataset(sentiment_df)
+    active_signals, summary_stats = compute_backtest_accuracy(sentiment_df, returns_df)
     return active_signals, summary_stats
