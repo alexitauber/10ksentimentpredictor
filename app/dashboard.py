@@ -2,8 +2,10 @@ import json
 from pathlib import Path
 import sys
 
+import altair as alt
 import pandas as pd
 import streamlit as st
+import yfinance as yf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -39,9 +41,7 @@ def apply_theme():
             [data-testid="stSidebar"] {
                 background: #f8fafc;
                 border-right: 1px solid #e2e8f0;
-            }
-            [data-testid="stSidebar"] * {
-                color: #0f172a !important;
+                display: none;
             }
             [data-testid="stTextInputRootElement"] input {
                 background: #ffffff;
@@ -144,21 +144,197 @@ def render_sentiment_bars(result: dict):
         )
 
 
-def render_historical_context(backtest_results: pd.DataFrame, ticker: str):
+def prepare_ticker_history(backtest_results: pd.DataFrame, ticker: str) -> pd.DataFrame:
     ticker_history = backtest_results[backtest_results["ticker"] == ticker].copy()
+    if ticker_history.empty:
+        return ticker_history
+
+    ticker_history["filing_date"] = pd.to_datetime(ticker_history["filing_date"])
+    dedupe_columns = [column for column in ["accession_number", "filing_date", "predicted_direction", "CAR"] if column in ticker_history.columns]
+    if dedupe_columns:
+        ticker_history = ticker_history.drop_duplicates(subset=dedupe_columns)
+
+    return ticker_history.sort_values("filing_date")
+
+
+@st.cache_data(show_spinner=False)
+def load_price_history(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
+    price_history = yf.download(
+        ticker,
+        start=start_date,
+        end=end_date,
+        interval="1d",
+        auto_adjust=True,
+        progress=False,
+    )
+    if price_history is None or price_history.empty:
+        return pd.DataFrame()
+
+    if isinstance(price_history.columns, pd.MultiIndex):
+        close_frame = price_history["Close"].copy()
+        if ticker in close_frame.columns:
+            close_series = close_frame[ticker]
+        else:
+            close_series = close_frame.iloc[:, 0]
+    else:
+        close_series = price_history["Close"]
+
+    daily_history = (
+        close_series.dropna()
+        .rename("close")
+        .reset_index()
+        .rename(columns={"Date": "date"})
+        .sort_values("date")
+    )
+    daily_history["daily_return"] = daily_history["close"].pct_change()
+    daily_history["daily_return_label"] = daily_history["daily_return"].map(
+        lambda value: "N/A" if pd.isna(value) else f"{value:.2%}"
+    )
+    return daily_history
+
+
+def render_price_prediction_chart(ticker_history: pd.DataFrame, ticker: str):
     if ticker_history.empty:
         st.info("No historical backtest data for this ticker yet.")
         return
 
-    ticker_history["filing_date"] = pd.to_datetime(ticker_history["filing_date"])
-    ticker_history = ticker_history.sort_values("filing_date")
-    chart_df = ticker_history.set_index("filing_date")[["compound", "CAR"]]
+    start_date = (ticker_history["filing_date"].min() - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+    end_date = (ticker_history["filing_date"].max() + pd.Timedelta(days=75)).strftime("%Y-%m-%d")
+    price_history = load_price_history(ticker, start_date, end_date)
 
-    st.line_chart(chart_df)
+    if price_history.empty:
+        st.info("Price history is not available for this ticker right now.")
+        return
+
+    price_lookup = price_history.set_index("date")["close"]
+    trading_dates = price_lookup.index
+
+    filing_markers = ticker_history[["filing_date", "predicted_direction", "actual_direction", "correct", "compound", "CAR"]].copy()
+    filing_markers["date"] = filing_markers["filing_date"].apply(
+        lambda filing_date: trading_dates[trading_dates.searchsorted(filing_date, side="left")]
+        if trading_dates.searchsorted(filing_date, side="left") < len(trading_dates)
+        else pd.NaT
+    )
+    filing_markers = filing_markers.dropna(subset=["date"]).copy()
+    filing_markers["price"] = filing_markers["date"].map(price_lookup)
+    filing_markers["status"] = filing_markers["correct"].map({1: "Correct", 0: "Incorrect"})
+
+    price_line = (
+        alt.Chart(price_history)
+        .mark_line(color="#2563eb", strokeWidth=3)
+        .encode(
+            x=alt.X(
+                "date:T",
+                title="Date",
+                axis=alt.Axis(
+                    format="%Y",
+                    labelAngle=0,
+                    tickCount=alt.TimeIntervalStep(interval="year", step=1),
+                ),
+            ),
+            y=alt.Y("close:Q", title="Adjusted Close Price"),
+            tooltip=[
+                alt.Tooltip("date:T", title="Date"),
+                alt.Tooltip("close:Q", title="Close", format=".2f"),
+                alt.Tooltip("daily_return_label:N", title="Daily return"),
+            ],
+        )
+    )
+
+    daily_points = (
+        alt.Chart(price_history)
+        .mark_circle(color="#2563eb", opacity=0.35, size=28)
+        .encode(
+            x=alt.X(
+                "date:T",
+                title="Date",
+                axis=alt.Axis(
+                    format="%Y",
+                    labelAngle=0,
+                    tickCount=alt.TimeIntervalStep(interval="year", step=1),
+                ),
+            ),
+            y=alt.Y("close:Q", title="Adjusted Close Price"),
+            tooltip=[
+                alt.Tooltip("date:T", title="Date"),
+                alt.Tooltip("close:Q", title="Close", format=".2f"),
+                alt.Tooltip("daily_return_label:N", title="Daily return"),
+            ],
+        )
+    )
+
+    filing_rules = (
+        alt.Chart(filing_markers)
+        .mark_rule(strokeDash=[4, 4], strokeWidth=1.5)
+        .encode(
+            x="date:T",
+            color=alt.Color(
+                "predicted_direction:N",
+                scale=alt.Scale(domain=["UP", "DOWN", "NEUTRAL"], range=["#15803d", "#b91c1c", "#64748b"]),
+                title="Prediction",
+            ),
+            tooltip=[
+                alt.Tooltip("filing_date:T", title="10-K date"),
+                alt.Tooltip("predicted_direction:N", title="Predicted"),
+                alt.Tooltip("actual_direction:N", title="Actual"),
+                alt.Tooltip("compound:Q", title="Positivity ratio", format=".3f"),
+                alt.Tooltip("CAR:Q", title="30-day CAR", format=".2%"),
+                alt.Tooltip("status:N", title="Accuracy"),
+            ],
+        )
+    )
+
+    signal_points = (
+        alt.Chart(filing_markers)
+        .mark_point(filled=True, size=240)
+        .encode(
+            x="date:T",
+            y="price:Q",
+            shape=alt.Shape(
+                "predicted_direction:N",
+                scale=alt.Scale(domain=["UP", "DOWN", "NEUTRAL"], range=["triangle-up", "triangle-down", "circle"]),
+                title="Prediction",
+            ),
+            color=alt.Color(
+                "predicted_direction:N",
+                scale=alt.Scale(domain=["UP", "DOWN", "NEUTRAL"], range=["#15803d", "#b91c1c", "#64748b"]),
+                title="Prediction",
+            ),
+            tooltip=[
+                alt.Tooltip("filing_date:T", title="10-K date"),
+                alt.Tooltip("price:Q", title="Price on filing", format=".2f"),
+                alt.Tooltip("predicted_direction:N", title="Predicted"),
+                alt.Tooltip("actual_direction:N", title="Actual"),
+                alt.Tooltip("compound:Q", title="Positivity ratio", format=".3f"),
+                alt.Tooltip("CAR:Q", title="30-day CAR", format=".2%"),
+                alt.Tooltip("status:N", title="Accuracy"),
+            ],
+        )
+    )
+
+    st.altair_chart((price_line + daily_points + filing_rules + signal_points).properties(height=420), use_container_width=True)
+    st.caption("The chart now shows daily Yahoo Finance adjusted close prices. Hover any daily point to see the stock price and that day's return, while the filing markers show whether the model called UP or DOWN.")
+
+
+def render_historical_context(backtest_results: pd.DataFrame, ticker: str):
+    ticker_history = prepare_ticker_history(backtest_results, ticker)
+    if ticker_history.empty:
+        st.info("No historical backtest data for this ticker yet.")
+        return
+
+    st.subheader("Price and Prediction Tracking")
+    render_price_prediction_chart(ticker_history, ticker)
+
+    st.subheader("Historical Records")
     st.dataframe(
         ticker_history[
             ["filing_date", "compound", "predicted_direction", "actual_direction", "CAR", "correct"]
-        ].assign(filing_date=lambda df: df["filing_date"].dt.strftime("%Y-%m-%d")),
+        ].assign(
+            filing_date=lambda df: df["filing_date"].dt.strftime("%Y-%m-%d"),
+            compound=lambda df: df["compound"].map(lambda value: f"{value:.3f}"),
+            CAR=lambda df: df["CAR"].map(lambda value: f"{value:.2%}"),
+            correct=lambda df: df["correct"].map({1: "Yes", 0: "No"}),
+        ).rename(columns={"compound": "Positivity ratio"}),
         use_container_width=True,
         hide_index=True,
     )
@@ -192,31 +368,19 @@ def get_ticker_backtest_context(saved_backtest_results: pd.DataFrame, ticker: st
 def main():
     apply_theme()
     backtest_results = load_backtest_results()
-    backtest_summary = load_backtest_summary()
-
     st.title("10-K Sentiment Stock Predictor")
     st.write(
         "Analyze the latest Item 1 section from a company's 10-K and turn its language into a directional stock projection."
     )
 
-    with st.sidebar:
-        st.subheader("Backtest Snapshot")
-        if backtest_summary:
-            st.metric("Overall accuracy", f"{backtest_summary.get('overall_accuracy', 0):.1%}")
-            st.caption(f"Based on {backtest_summary.get('n_observations', 0)} filings")
-            st.write(f"UP accuracy: {backtest_summary.get('up_accuracy', 0):.1%}")
-            st.write(f"DOWN accuracy: {backtest_summary.get('down_accuracy', 0):.1%}")
-        else:
-            st.warning("Run `main.py` first to generate the historical backtest files.")
-
-        with st.expander("How it works", expanded=False):
-            st.write(
-                "The app downloads the latest 10-K, extracts Item 1, scores the text with the "
-                "Loughran-McDonald financial dictionary, applies sentiment thresholds, and compares "
-                "the live projection against the historical backtest data when available."
-            )
-            st.write(f"Positive threshold: {POSITIVE_THRESHOLD}")
-            st.write(f"Negative threshold: {NEGATIVE_THRESHOLD}")
+    with st.expander("How it works", expanded=False):
+        st.write(
+            "The app downloads the latest 10-K, extracts Item 1, scores the text with the "
+            "Loughran-McDonald financial dictionary, applies sentiment thresholds, and compares "
+            "the live projection against the historical backtest data when available."
+        )
+        st.write(f"Positive threshold: {POSITIVE_THRESHOLD}")
+        st.write(f"Negative threshold: {NEGATIVE_THRESHOLD}")
 
     ticker_input = st.text_input("Enter a ticker symbol", value="CVX")
     analyze_clicked = st.button("Analyze", type="primary")
@@ -245,7 +409,7 @@ def main():
         st.info(f"Generated a fresh backtest for {ticker} from its downloaded filings because it was not already in the saved history.")
 
     with st.expander("Item 1 preview", expanded=False):
-        st.write(result["preview_text"])
+        st.text_area("Full Item 1 text", value=result["item_1_content"], height=500)
 
     left_col, right_col = st.columns([1.1, 0.9])
 
@@ -255,7 +419,7 @@ def main():
         st.subheader("Sentiment Detail")
         detail_cols = st.columns(4)
         directional_mix = get_directional_sentiment_mix(result)
-        detail_cols[0].metric("Compound", f"{result['compound']:.3f}")
+        detail_cols[0].metric("Positivity ratio", f"{result['compound']:.3f}")
         detail_cols[1].metric("Positive", f"{directional_mix['positive']:.1%}")
         detail_cols[2].metric("Negative", f"{directional_mix['negative']:.1%}")
         detail_cols[3].metric("Matched words", result["matched_word_count"])
