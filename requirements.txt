@@ -1,0 +1,6 @@
+streamlit
+altair
+pandas
+yfinance
+beautifulsoup4
+sec-edgar-downloader
