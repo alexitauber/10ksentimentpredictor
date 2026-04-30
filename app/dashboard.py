@@ -144,6 +144,18 @@ def render_sentiment_bars(result: dict):
         )
 
 
+def render_compact_metric(label: str, value: str | int):
+    st.markdown(
+        f"""
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.9rem 1rem;">
+            <div style="font-size: 0.82rem; color: #475569; margin-bottom: 0.3rem;">{label}</div>
+            <div style="font-size: 1.35rem; font-weight: 600; color: #0f172a; line-height: 1.15;">{value}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def prepare_ticker_history(backtest_results: pd.DataFrame, ticker: str) -> pd.DataFrame:
     ticker_history = backtest_results[backtest_results["ticker"] == ticker].copy()
     if ticker_history.empty:
@@ -614,10 +626,14 @@ def main():
         st.subheader("Sentiment Detail")
         detail_cols = st.columns(4)
         directional_mix = get_directional_sentiment_mix(result)
-        detail_cols[0].metric("Positivity ratio", f"{result['compound']:.3f}")
-        detail_cols[1].metric("Positive", f"{directional_mix['positive']:.1%}")
-        detail_cols[2].metric("Negative", f"{directional_mix['negative']:.1%}")
-        detail_cols[3].metric("Matched words", result["matched_word_count"])
+        with detail_cols[0]:
+            render_compact_metric("Positivity ratio", f"{result['compound']:.3f}")
+        with detail_cols[1]:
+            render_compact_metric("Positive", f"{directional_mix['positive'] * 100:.1f}%")
+        with detail_cols[2]:
+            render_compact_metric("Negative", f"{directional_mix['negative'] * 100:.1f}%")
+        with detail_cols[3]:
+            render_compact_metric("Matched words", result["matched_word_count"])
         render_sentiment_bars(result)
 
     with right_col:
