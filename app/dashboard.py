@@ -316,6 +316,198 @@ def render_price_prediction_chart(ticker_history: pd.DataFrame, ticker: str):
     st.caption("The chart now shows daily Yahoo Finance adjusted close prices. Hover any daily point to see the stock price and that day's return, while the filing markers show whether the model called UP or DOWN.")
 
 
+def render_event_window_chart(ticker_history: pd.DataFrame, ticker: str):
+    if ticker_history.empty or "filing_date" not in ticker_history.columns:
+        st.info("Not enough price data is available to show market reaction around filing dates.")
+        return
+
+    ticker_history = ticker_history.copy()
+    ticker_history["filing_date"] = pd.to_datetime(ticker_history["filing_date"], errors="coerce", utc=True).dt.tz_convert(None)
+    ticker_history = ticker_history.dropna(subset=["filing_date"]).sort_values("filing_date")
+    if ticker_history.empty:
+        st.info("Not enough price data is available to show market reaction around filing dates.")
+        return
+
+    start_date = (ticker_history["filing_date"].min() - pd.Timedelta(days=45)).strftime("%Y-%m-%d")
+    end_date = (ticker_history["filing_date"].max() + pd.Timedelta(days=45)).strftime("%Y-%m-%d")
+    stock_prices = load_price_history(ticker, start_date, end_date)
+    spy_prices = load_price_history("SPY", start_date, end_date)
+
+    if stock_prices.empty or spy_prices.empty:
+        st.info("Not enough price data is available to show market reaction around filing dates.")
+        return
+
+    stock_prices = stock_prices.copy()
+    spy_prices = spy_prices.copy()
+    stock_prices["date"] = pd.to_datetime(stock_prices["date"], errors="coerce", utc=True).dt.tz_convert(None).dt.normalize()
+    spy_prices["date"] = pd.to_datetime(spy_prices["date"], errors="coerce", utc=True).dt.tz_convert(None).dt.normalize()
+    stock_prices["close"] = pd.to_numeric(stock_prices["close"], errors="coerce")
+    spy_prices["close"] = pd.to_numeric(spy_prices["close"], errors="coerce")
+
+    stock_lookup = stock_prices.dropna(subset=["date", "close"]).groupby("date")["close"].last().sort_index()
+    spy_lookup = spy_prices.dropna(subset=["date", "close"]).groupby("date")["close"].last().sort_index()
+    common_trading_dates = stock_lookup.index.intersection(spy_lookup.index).sort_values()
+
+    event_rows = []
+    for filing_number, (_, filing) in enumerate(ticker_history.iterrows(), start=1):
+        filing_date = pd.Timestamp(filing["filing_date"]).normalize()
+        event_position = common_trading_dates.searchsorted(filing_date, side="left")
+
+        # If the filing was not on a trading day, the next shared trading day becomes day 0.
+        if event_position >= len(common_trading_dates):
+            continue
+
+        window_start = event_position - 5
+        window_end = event_position + 6
+        if window_start < 0 or window_end > len(common_trading_dates):
+            continue
+
+        window_dates = common_trading_dates[window_start:window_end]
+        stock_day0_price = stock_lookup.loc[common_trading_dates[event_position]]
+        spy_day0_price = spy_lookup.loc[common_trading_dates[event_position]]
+
+        if pd.isna(stock_day0_price) or pd.isna(spy_day0_price) or stock_day0_price == 0 or spy_day0_price == 0:
+            continue
+
+        stock_window_prices = stock_lookup.loc[window_dates]
+        spy_window_prices = spy_lookup.loc[window_dates]
+        if len(stock_window_prices) != 11 or len(spy_window_prices) != 11:
+            continue
+        if stock_window_prices.isna().any() or spy_window_prices.isna().any():
+            continue
+
+        for event_day, trading_date in zip(range(-5, 6), window_dates):
+            stock_return = (stock_window_prices.loc[trading_date] / stock_day0_price) - 1
+            spy_return = (spy_window_prices.loc[trading_date] / spy_day0_price) - 1
+
+            event_rows.append(
+                {
+                    "ticker": ticker,
+                    "filing_date": filing_date,
+                    "filing_number": filing_number,
+                    "event_day": event_day,
+                    "stock_return": stock_return,
+                    "spy_return": spy_return,
+                    "abnormal_return": stock_return - spy_return,
+                    "predicted_direction": filing.get("predicted_direction"),
+                    "actual_direction": filing.get("actual_direction"),
+                    "correct": filing.get("correct"),
+                }
+            )
+
+    event_window = pd.DataFrame(event_rows)
+    if event_window.empty:
+        st.info("Not enough price data is available to show market reaction around filing dates.")
+        return
+
+    event_window["filing_date_label"] = event_window["filing_date"].dt.strftime("%Y-%m-%d")
+    event_window["correct_label"] = event_window["correct"].map({1: "Yes", 0: "No"}).fillna("N/A")
+    for numeric_column in ["event_day", "stock_return", "spy_return", "abnormal_return"]:
+        event_window[numeric_column] = pd.to_numeric(event_window[numeric_column], errors="coerce")
+
+    event_window = event_window.dropna(subset=["event_day", "stock_return", "spy_return", "abnormal_return"])
+    if event_window.empty:
+        st.info("Not enough price data is available to show market reaction around filing dates.")
+        return
+
+    chart_data = event_window.melt(
+        id_vars=[
+            "ticker",
+            "filing_date",
+            "filing_date_label",
+            "filing_number",
+            "event_day",
+            "abnormal_return",
+            "predicted_direction",
+            "actual_direction",
+            "correct_label",
+        ],
+        value_vars=["stock_return", "spy_return"],
+        var_name="series",
+        value_name="return",
+    )
+    chart_data["series"] = chart_data["series"].map(
+        {
+            "stock_return": "Stock return",
+            "spy_return": "SPY return",
+        }
+    )
+    chart_data["return"] = pd.to_numeric(chart_data["return"], errors="coerce")
+    chart_data = chart_data.dropna(subset=["event_day", "return", "series"])
+
+    if chart_data.empty:
+        st.info("Not enough price data is available to show market reaction around filing dates.")
+        return
+
+    st.write(
+        "Each chart shows how the stock moved relative to SPY in the five trading days before and after a 10-K filing."
+    )
+
+    for filing_date_label, filing_chart_data in chart_data.groupby("filing_date_label", sort=True):
+        filing_chart_data = filing_chart_data.sort_values(["series", "event_day"])
+        filing_details = filing_chart_data.iloc[0]
+        predicted_direction = filing_details.get("predicted_direction")
+        actual_direction = filing_details.get("actual_direction")
+        if pd.isna(predicted_direction):
+            predicted_direction = "N/A"
+        if pd.isna(actual_direction):
+            actual_direction = "N/A"
+        expander_title = (
+            f"Filing date: {filing_date_label} | "
+            f"Predicted: {predicted_direction} | Actual: {actual_direction}"
+        )
+
+        with st.expander(expander_title, expanded=False):
+            return_lines = (
+                alt.Chart(filing_chart_data)
+                .mark_line(point=True, strokeWidth=2.5)
+                .encode(
+                    x=alt.X(
+                        "event_day:Q",
+                        title="Trading Days From 10-K Filing",
+                        scale=alt.Scale(domain=[-5, 5]),
+                        axis=alt.Axis(values=list(range(-5, 6)), labelAngle=0),
+                    ),
+                    y=alt.Y("return:Q", title="Return From Event Day 0", axis=alt.Axis(format="%")),
+                    color=alt.Color(
+                        "series:N",
+                        title="Series",
+                        scale=alt.Scale(domain=["Stock return", "SPY return"], range=["#2563eb", "#64748b"]),
+                    ),
+                    tooltip=[
+                        alt.Tooltip("filing_date:T", title="Filing date"),
+                        alt.Tooltip("event_day:Q", title="Event day"),
+                        alt.Tooltip("series:N", title="Series"),
+                        alt.Tooltip("return:Q", title="Return", format=".2%"),
+                        alt.Tooltip("abnormal_return:Q", title="Abnormal return", format=".2%"),
+                        alt.Tooltip("predicted_direction:N", title="Predicted"),
+                        alt.Tooltip("actual_direction:N", title="Actual"),
+                        alt.Tooltip("correct_label:N", title="Correct"),
+                    ],
+                )
+            )
+
+            event_day_rule = (
+                alt.Chart(pd.DataFrame({"event_day": [0]}))
+                .mark_rule(color="#0f172a", strokeDash=[5, 5], strokeWidth=1.5)
+                .encode(x="event_day:Q")
+            )
+
+            st.altair_chart(
+                (return_lines + event_day_rule).properties(
+                    title="Market Reaction Around 10-K Filing Date",
+                    height=340,
+                ),
+                use_container_width=True,
+            )
+
+    st.caption("Returns are normalized to the first shared trading day on or after each 10-K filing date. Filings without a full five-trading-day window are skipped.")
+
+    with st.expander("Debug event-window data", expanded=False):
+        st.write(f"Rows generated: {len(event_window)}")
+        st.dataframe(event_window.head(), use_container_width=True, hide_index=True)
+
+
 def render_historical_context(backtest_results: pd.DataFrame, ticker: str):
     ticker_history = prepare_ticker_history(backtest_results, ticker)
     if ticker_history.empty:
@@ -324,6 +516,9 @@ def render_historical_context(backtest_results: pd.DataFrame, ticker: str):
 
     st.subheader("Price and Prediction Tracking")
     render_price_prediction_chart(ticker_history, ticker)
+
+    st.subheader("Market Reaction Around 10-K Filing Dates")
+    render_event_window_chart(ticker_history, ticker)
 
     st.subheader("Historical Records")
     st.dataframe(
